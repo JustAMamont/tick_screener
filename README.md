@@ -1,5 +1,7 @@
 # High-Performance Real-Time Market Anomaly Scanner
 
+<video src="media/demo.mp4" autoplay loop muted playsinline width="100%"></video>
+
 Асинхронный сканер для мониторинга криптовалютных рынков в режиме реального времени. Система агрегирует потоки сделок (trades) через WebSockets, формирует кастомные временные интервалы (OHLCV) и детектирует аномальные всплески волатильности и объема.
 
 ## Проблематика
