@@ -290,6 +290,8 @@ class ProcessesLoop:
 
             lum.info(f"ProcessesLoop: Старт. Пар: {len(pairlist_to_process)}, Чанков: {len(chunked_list)}", location=("scanner.pyx", 291))
 
+            DataCache.alert_tasks.clear()
+
             for chunk in chunked_list:
                 if not chunk: continue
                 
@@ -318,6 +320,9 @@ class ProcessesLoop:
         for task in self.background_tasks:
             if task and not task.done():
                 task.cancel()
+
+        DataCache.alert_tasks.clear()
+        self.background_tasks.clear()
 
 
 class PairlistLoop:
