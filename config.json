@@ -1,12 +1,12 @@
 {
-    "return_limit": 2,
-    "volume_limit": 2000,
+    "return_limit": 0.1,
+    "volume_limit": 200,
     "trange": 1,
     "blacklist": [],
     "telegram": {
         "bot_token": "YOUR_BOT_TOKEN",
         "chat_id": -1001234567890
     },
-    "currency_type": "spot",
+    "currency_type": "swap",
     "delimiter": ""
 }

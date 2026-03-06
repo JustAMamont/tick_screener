@@ -23,7 +23,7 @@ np.import_array()
 uvloop.install()
 
 # capture_caller=False, так как мы передаем location вручную для скорости и точности
-lum = Lumina.get_logger(capture_caller=False)
+lum = Lumina.get_logger(capture_caller=False, flush_interval_ms=1000)
 
 @dataclass
 class DataCache:
@@ -69,7 +69,7 @@ class SymbolFormatter:
 
 
 class TelegramSender:
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: Optional[Bot]):
         self.bot = bot
 
     async def run(self):
@@ -80,15 +80,18 @@ class TelegramSender:
                 DataCache.alerts.task_done()
                 if alert and alert != prev_alert:
                     # PROD: Отправка в Telegram
-                    await self.bot.send_message(DataCache.config['telegram']['chat_id'], text=alert[2], parse_mode="MARKDOWN")
+                    alert_text = alert[2]
+                    if self.bot:
+                        await self.bot.send_message(DataCache.config['telegram']['chat_id'], text=alert_text, parse_mode="MARKDOWN")
                     
                     # Логируем факт отправки
-                    lum.debug("Alert sent", text=alert[2], location=("scanner.pyx", 86))
+                    debug_alert = alert_text.replace("\n", " ")
+                    lum.debug("Alert sent", text=debug_alert, location=("scanner.pyx", 89))
                     prev_alert = alert
             except (asyncio.exceptions.CancelledError, KeyboardInterrupt):
                 break
             except Exception as e:
-                lum.error(f"TelegramSender.run: ", exc=e, location=("scanner.pyx", 91))
+                lum.error(f"TelegramSender.run: ", exc=e, location=("scanner.pyx", 94))
 
 
 class DataProcessor:
@@ -113,8 +116,8 @@ class DataProcessor:
     async def _initialize_connection(self):
         await self._close_connection()
         
-        with lum.profile("DP._initialize_connection", location=("scanner.pyx", 116)):
-            lum.info(f"DataProcessor: Инициализация соединения и кэша...", chunk=self.symbols_str, location=("scanner.pyx", 117))
+        with lum.profile("DP._initialize_connection", location=("scanner.pyx", 119)):
+            lum.info(f"DataProcessor: Инициализация соединения и кэша...", chunk=self.symbols_str, location=("scanner.pyx", 120))
             self.exc = self._create_exchange_instance()
             timeframe_seconds = DataCache.config.get('trange', 1)
             self.current_trange = timeframe_seconds
@@ -128,17 +131,17 @@ class DataProcessor:
                 for s in self.symbols
             }
             lum.info(f"DataProcessor: Кэш инициализирован.", 
-                chunk=self.symbols_str, tf_sec=self.current_trange, window_size_sec=window_size_seconds, location=("scanner.pyx", 131))
+                chunk=self.symbols_str, tf_sec=self.current_trange, window_size_sec=window_size_seconds, location=("scanner.pyx", 133))
             self.reconnect_delay = 1.0
 
 
     async def _close_connection(self):
         if self.exc:
-            lum.warning(f"DataProcessor: Закрытие соединения...", chunk=self.symbols_str, location=("scanner.pyx", 137))
+            lum.warning(f"DataProcessor: Закрытие соединения...", chunk=self.symbols_str, location=("scanner.pyx", 140))
             try:
                 await self.exc.close()
             except Exception as e:
-                lum.error(f"DataProcessor: Ошибка при закрытии соединения: {e}", exc=e, chunk=self.symbols_str, location=("scanner.pyx", 141))
+                lum.error(f"DataProcessor: Ошибка при закрытии соединения: {e}", exc=e, chunk=self.symbols_str, location=("scanner.pyx", 144))
             finally:
                 self.exc = None
 
@@ -155,15 +158,15 @@ class DataProcessor:
                             await self._process_single()
                     except (ccxt.NetworkError, ccxt.DDoSProtection, ClientConnectionError, asyncio.TimeoutError) as e:
                         lum.warning(f"Ошибка сети: Перезапуск через {self.reconnect_delay:.1f}с.",
-                            chunk=self.symbols_str, network_exc=type(e).__name__, location=("scanner.pyx", 158))
+                            chunk=self.symbols_str, network_exc=type(e).__name__, location=("scanner.pyx", 161))
                         await self._close_connection()
                         await asyncio.sleep(self.reconnect_delay)
                         self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
                     except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
-                        lum.info(f"Задача отменена.", chunk=self.symbols_str, location=("scanner.pyx", 163))
+                        lum.info(f"Задача отменена.", chunk=self.symbols_str, location=("scanner.pyx", 166))
                         self.is_running = False
                     except Exception as e:
-                        lum.critical(f"КРИТИЧЕСКАЯ ОШИБКА в цикле!", exc=e, chunk=self.symbols_str, location=("scanner.pyx", 166))
+                        lum.critical(f"КРИТИЧЕСКАЯ ОШИБКА в цикле!", exc=e, chunk=self.symbols_str, location=("scanner.pyx", 169))
                         await asyncio.sleep(5)
         finally:
             await self.close("Finished processing")
@@ -174,7 +177,7 @@ class DataProcessor:
         if DataCache.config.get('trange') != self.current_trange:
             lum.warning(
                 f"DataProcessor: Смена таймфрейма. Пересоздание...",
-                chunk=self.symbols_str, location=("scanner.pyx", 177)
+                chunk=self.symbols_str, location=("scanner.pyx", 180)
             )
             return True
         return False
@@ -208,7 +211,7 @@ class DataProcessor:
         cdef long long ts, prev_ts
         
         # Профилирование обработки трейдов
-        with lum.profile("DP._handle_new_trades", min_duration_ms=10, location=("scanner.pyx", 211)):
+        with lum.profile("DP._handle_new_trades", min_duration_ms=10, location=("scanner.pyx", 214)):
             for trade in new_trades:
                 symbol = trade.get('symbol')
                 if symbol and symbol in self.trades_cache:
@@ -237,7 +240,7 @@ class DataProcessor:
                     try:
                         DataCache.alerts.put_nowait((symbol, ts, message))
                     except asyncio.QueueFull:
-                        lum.warning("Alert queue full", symbol=symbol, location=("scanner.pyx", 240))
+                        lum.warning("Alert queue full", symbol=symbol, location=("scanner.pyx", 243))
                     self.prev_ts_map[symbol] = ts
 
     async def _wait_for_config(self):
@@ -246,7 +249,7 @@ class DataProcessor:
 
     async def close(self, source: str):
         self.is_running = False
-        lum.info(f"DataProcessor.close", source=source, chunk=self.symbols_str, location=("scanner.pyx", 249))
+        lum.info(f"DataProcessor.close", source=source, chunk=self.symbols_str, location=("scanner.pyx", 252))
         await self._close_connection()
 
 
@@ -265,19 +268,19 @@ class ProcessesLoop:
             supports_batching = temp_exc.has.get('watchTradesForSymbols', False)
             await temp_exc.close()
         except Exception as e:
-            lum.error("Ошибка проверки возможностей биржи", exc=e, location=("scanner.pyx", 268))
+            lum.error("Ошибка проверки возможностей биржи", exc=e, location=("scanner.pyx", 271))
             return
 
         try:
             while not DataCache.pairlist:
-                lum.info("ProcessesLoop: Ожидание пар...", location=("scanner.pyx", 273))
+                lum.info("ProcessesLoop: Ожидание пар...", location=("scanner.pyx", 276))
                 await asyncio.sleep(5)
 
             pairlist_to_process = list(DataCache.pairlist)
 
             # PROD: Ограничение убрано
             # if len(pairlist_to_process) > 10:
-            #     lum.warning(f"DEBUG LIMIT...", location=("scanner.pyx", 270))
+            #     lum.warning(f"DEBUG LIMIT...", location=("scanner.pyx", 283))
             #     pairlist_to_process = pairlist_to_process[:10]
             
             use_batching_mode = supports_batching
@@ -288,7 +291,7 @@ class ProcessesLoop:
                 for i in range(0, len(pairlist_to_process), chunk_size)
             ]
 
-            lum.info(f"ProcessesLoop: Старт. Пар: {len(pairlist_to_process)}, Чанков: {len(chunked_list)}", location=("scanner.pyx", 291))
+            lum.info(f"ProcessesLoop: Старт. Пар: {len(pairlist_to_process)}, Чанков: {len(chunked_list)}", location=("scanner.pyx", 294))
 
             DataCache.alert_tasks.clear()
 
@@ -304,19 +307,19 @@ class ProcessesLoop:
                 
                 await asyncio.sleep(task_launch_delay)
 
-            lum.success("Воркеры запущены.", location=("scanner.pyx", 305))
+            lum.success("Воркеры запущены.", location=("scanner.pyx", 310))
             if self.background_tasks:
                 await asyncio.gather(*self.background_tasks)
 
         except asyncio.CancelledError:
-            lum.warning("ProcessesLoop: Cancelled", location=("scanner.pyx", 310))
+            lum.warning("ProcessesLoop: Cancelled", location=("scanner.pyx", 315))
         except Exception as e:
-            lum.critical(f"ProcessesLoop error", exc=e, location=("scanner.pyx", 312))
+            lum.critical(f"ProcessesLoop error", exc=e, location=("scanner.pyx", 317))
         finally:
             await self.cleanup()
 
     async def cleanup(self):
-        lum.info("ProcessesLoop: Cleanup...", location=("scanner.pyx", 317))
+        lum.info("ProcessesLoop: Cleanup...", location=("scanner.pyx", 322))
         for task in self.background_tasks:
             if task and not task.done():
                 task.cancel()
@@ -341,12 +344,12 @@ class PairlistLoop:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                lum.error(f"PairlistLoop error", exc=e, location=("scanner.pyx", 339))
+                lum.error(f"PairlistLoop error", exc=e, location=("scanner.pyx", 347))
                 await asyncio.sleep(10)
 
     def _sync_load_markets(self, exc_id):
         # Профиль для тяжелой задачи
-        with lum.profile("Pairlist Updater", location=("scanner.pyx", 344)):
+        with lum.profile("Pairlist Updater", location=("scanner.pyx", 352)):
             import ccxt as ccxt_sync 
             exc = None
             try:
@@ -380,16 +383,16 @@ class PairlistLoop:
                                 # Отправляем в очередь (ts=0, чтобы точно прошло)
                                 try:
                                     DataCache.alerts.put_nowait((symbol, 0, msg_text))
-                                    lum.success(f"Listing detected: {symbol}", location=("scanner.pyx", 378))
+                                    lum.success(f"Listing detected: {symbol}", location=("scanner.pyx", 386))
                                 except asyncio.QueueFull:
-                                    lum.warning(f"Alert queue full (Listing): {symbol}", location=("scanner.pyx", 380))
+                                    lum.warning(f"Alert queue full (Listing): {symbol}", location=("scanner.pyx", 388))
                                 
                                 DataCache.historical_pairlist.add(symbol)
 
-                lum.success(f"Markets loaded. Active: {len(active_symbols)}", location=("scanner.pyx", 384))
+                lum.success(f"Markets loaded. Active: {len(active_symbols)}", location=("scanner.pyx", 392))
 
             except Exception as e:
-                lum.error("Error loading markets (Thread)", exc=e, location=("scanner.pyx", 387))
+                lum.error("Error loading markets (Thread)", exc=e, location=("scanner.pyx", 395))
             finally:
                 if exc: del exc; del ccxt_sync
                 gc.collect()
@@ -406,11 +409,11 @@ class ConfigUpdater:
                     if mtime > last_modified:
                         DataCache.config = await ConfigManager.read_config()
                         last_modified = mtime
-                        lum.success("Config updated", location=("scanner.pyx", 404))
+                        lum.success("Config updated", location=("scanner.pyx", 412))
                 await asyncio.sleep(5)
             except asyncio.CancelledError: break
             except Exception as e:
-                lum.error("ConfigUpdater error", exc=e, location=("scanner.pyx", 408))
+                lum.error("ConfigUpdater error", exc=e, location=("scanner.pyx", 416))
                 await asyncio.sleep(5)
 
 
@@ -427,7 +430,7 @@ class Main:
         self.task_launch_delay = task_launch_delay
 
     async def run_tasks(self):
-        lum.info(f"Запуск сканера...", location=("scanner.pyx", 425))
+        lum.info(f"Запуск сканера...", location=("scanner.pyx", 433))
         try:
             DataCache.config = await ConfigManager.read_config()
             
@@ -447,9 +450,9 @@ class Main:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            lum.critical(f"Main crash", exc=e, location=("scanner.pyx", 445))
+            lum.critical(f"Main crash", exc=e, location=("scanner.pyx", 453))
         finally:
-            lum.info("Shutting down...", location=("scanner.pyx", 447))
+            lum.info("Shutting down...", location=("scanner.pyx", 455))
             for task in self.tasks:
                 if not task.done(): task.cancel()
             lum.shutdown()
